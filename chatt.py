@@ -288,8 +288,7 @@ class SecureApp:
         self.client = None
         self.current_user = None
         self.online_users = []
-        self.intercepted = []      # paquets en attente (pas encore dechiffrés)
-        self.attack_mode = False   # si True, les messages sont retenus avant déchiffrement
+        self.intercepted = []
 
         self._build_main_window()
         self._show_connect_dialog()
@@ -449,59 +448,18 @@ class SecureApp:
         msg_tab = tk.Frame(nb, bg=DARK)
         nb.add(msg_tab, text="  Interceptes  ")
 
-        # Toggle mode attaque
-        toggle_frame = tk.Frame(msg_tab, bg=DARK)
-        toggle_frame.pack(fill="x", padx=6, pady=(6, 2))
-
-        self.attack_var = tk.BooleanVar(value=False)
-
-        def toggle_attack():
-            self.attack_mode = self.attack_var.get()
-            if self.attack_mode:
-                atk_btn.config(text="Mode ATTAQUE: ON", bg=RED)
-                self._log("[DEV] Mode interception active — les paquets sont retenus", "attack")
-            else:
-                atk_btn.config(text="Mode ATTAQUE: OFF", bg=GRAY)
-                self._log("[DEV] Mode interception desactive", "warn")
-
-        atk_btn = tk.Checkbutton(
-            toggle_frame, text="Mode ATTAQUE: OFF",
-            variable=self.attack_var, bg=DARK, fg=FG,
-            selectcolor=DARK, activebackground=DARK,
-            font=("Courier", 9, "bold"),
-            indicatoron=False, relief="flat",
-            bd=0, padx=8, pady=4,
-            onvalue=True, offvalue=False,
-            command=toggle_attack)
-        atk_btn.config(bg=GRAY)
-        atk_btn.pack(side="left")
-
-        tk.Label(toggle_frame,
-                 text="  Active pour retenir\n  les paquets avant dechiffrement",
-                 bg=DARK, fg=GRAY, font=("Courier", 7), justify="left"
-                 ).pack(side="left", padx=8)
-
         self.intercept_lb = tk.Listbox(
             msg_tab, bg=DARK, fg=FG,
             font=("Courier", 9), relief="flat", bd=0,
             selectbackground=ACCENT, selectforeground="white",
             activestyle="none", highlightthickness=0)
-        self.intercept_lb.pack(fill="both", expand=True, padx=6, pady=4)
-
-        btn_row = tk.Frame(msg_tab, bg=DARK)
-        btn_row.pack(fill="x", padx=6, pady=(0, 6))
+        self.intercept_lb.pack(fill="both", expand=True, padx=6, pady=6)
 
         tk.Button(
-            btn_row, text="Modifier puis Dechiffrer", bg=BLUE, fg="white",
-            font=("Courier", 9, "bold"), relief="flat", bd=0,
-            cursor="hand2", command=self._decrypt_selected
-        ).pack(side="left", fill="x", expand=True, ipady=4, padx=(0, 4))
-
-        tk.Button(
-            btn_row, text="Attaquer", bg=RED, fg="white",
-            font=("Courier", 9, "bold"), relief="flat", bd=0,
+            msg_tab, text="Lancer une attaque", bg=RED, fg="white",
+            font=("Courier", 10, "bold"), relief="flat", bd=0,
             cursor="hand2", command=self._attack_dialog
-        ).pack(side="left", ipady=4)
+        ).pack(fill="x", padx=6, pady=(0, 6), ipady=4)
 
         # ── Tab 3: Cles ──────────────────────────────────────
         keys_tab = tk.Frame(nb, bg=DARK)
@@ -654,25 +612,12 @@ class SecureApp:
     # INCOMING MESSAGE
     # ----------------------------------------------------------
     def _on_incoming(self, pkg):
-        """Reçoit un paquet. Si mode attaque activé, retient avant déchiffrement."""
-        idx = len(self.intercepted)
         self.intercepted.append(pkg)
         self.intercept_lb.insert(
-            tk.END, f"{idx}: {pkg['sender']} -> {pkg['receiver']}  [EN ATTENTE]")
+            tk.END, f"{len(self.intercepted)-1}: {pkg['sender']} -> {pkg['receiver']}")
 
-        self._log(f"[RECV] Paquet #{idx} de {pkg['sender']}", "net")
-
-        if self.attack_mode:
-            self._chat_write(
-                f"[INTERCEPTE #{idx}] Paquet de {pkg['sender']} retenu — modifiez-le puis cliquez Dechiffrer\n",
-                "system")
-        else:
-            self._decrypt_and_show(idx)
-
-    def _decrypt_and_show(self, idx):
-        """Dechiffre et vérifie le paquet à l'index idx."""
-        pkg = self.intercepted[idx]
         sender = pkg["sender"]
+        self._log(f"[RECV] Paquet de {sender}", "net")
         try:
             aes_key = rsa_decrypt(self.current_user.private, b64d(pkg["key"]))
             plain   = aes_decrypt(aes_key, b64d(pkg["iv"]), b64d(pkg["ct"]))
@@ -685,25 +630,12 @@ class SecureApp:
             if valid:
                 self._chat_write("   Signature valide\n", "sig_ok")
             else:
-                self._chat_write("   Signature INVALIDE — message tampered!\n", "sig_bad")
-                self._log(f"ATTAQUE DETECTEE sur paquet #{idx}!", "attack")
-
-            # Mettre à jour la listbox
-            self.intercept_lb.delete(idx)
-            self.intercept_lb.insert(
-                idx,
-                f"{idx}: {pkg['sender']} -> {pkg['receiver']}  [{'OK' if valid else 'ATTAQUE'}]")
-            if not valid:
-                self.intercept_lb.itemconfig(idx, fg=RED)
-            else:
-                self.intercept_lb.itemconfig(idx, fg=GREEN)
+                self._chat_write("   Signature INVALIDE\n", "sig_bad")
+                self._log("ATTAQUE DETECTEE — signature invalide!", "attack")
 
         except Exception as e:
             self._chat_write(f"Dechiffrement echoue: {e}\n", "error")
-            self._log(f"[ERROR] paquet #{idx}: {e}", "warn")
-            self.intercept_lb.delete(idx)
-            self.intercept_lb.insert(idx, f"{idx}: {pkg['sender']} -> {pkg['receiver']}  [ERREUR]")
-            self.intercept_lb.itemconfig(idx, fg=ORANGE)
+            self._log(f"[ERROR] {e}", "warn")
 
     # ----------------------------------------------------------
     # USERS UPDATE
@@ -806,69 +738,46 @@ class SecureApp:
         else:
             self.net_area.insert(tk.END, "Non connecte\n", "key")
 
-    def _decrypt_selected(self):
-        """Déchiffre le paquet sélectionné (après éventuelle modification)."""
-        sel = self.intercept_lb.curselection()
-        if not sel:
-            self._log("Selectionne un paquet dans la liste", "warn")
-            return
-        idx = sel[0]
-        self._log(f"[DEV] Dechiffrement du paquet #{idx}", "net")
-        self._decrypt_and_show(idx)
-
     # ----------------------------------------------------------
     # ATTACK DIALOG
     # ----------------------------------------------------------
     def _attack_dialog(self):
         sel = self.intercept_lb.curselection()
         if not sel:
-            self._log("Selectionne un paquet dans la liste", "warn")
+            self._log("Selectionne un message dans la liste", "warn")
             return
         idx = sel[0]
         pkg = self.intercepted[idx]
 
         dlg = tk.Toplevel(self.root)
         dlg.title("Attaque")
-        dlg.geometry("320x310")
+        dlg.geometry("320x290")
         dlg.configure(bg=BG)
         dlg.resizable(False, False)
 
-        tk.Label(dlg, text=f"Paquet #{idx}  |  {pkg['sender']} -> {pkg['receiver']}",
+        tk.Label(dlg, text=f"Message {idx}  |  {pkg['sender']} -> {pkg['receiver']}",
                  bg=BG, fg=SUBTEXT, font=("Courier", 8)).pack(pady=(12, 2))
         tk.Label(dlg, text="Choisir le type d'attaque",
-                 bg=BG, fg=FG, font=("Courier", 11, "bold")).pack(pady=(0, 6))
-        tk.Label(dlg,
-                 text="Apres l'attaque, cliquez\n'Modifier puis Dechiffrer'",
-                 bg=BG, fg=GRAY, font=("Courier", 8)).pack(pady=(0, 10))
+                 bg=BG, fg=FG, font=("Courier", 11, "bold")).pack(pady=(0, 12))
 
         def attack(t):
-            self._log(f"[BEFORE] ct={pkg['ct'][:16]}... sig={pkg['sig'][:16]}...", "warn")
+            self._log(f"[BEFORE] {pkg['sender']}->{pkg['receiver']}  ct={pkg['ct'][:16]}...", "warn")
             if t == "msg":
-                pkg["ct"] = b64e(b"ATTACKED_CONTENT_INJECTED_XXX_000")
-                self._log(f"[ATTACK #{idx}] Ciphertext modifie", "attack")
+                pkg["ct"] = b64e(b"ATTACKED_CONTENT_XXX")
+                self._log("[ATTACK] Ciphertext modifie", "attack")
             elif t == "sig":
-                pkg["sig"] = b64e(b"FAKE_SIGNATURE_INVALID_XXX_000")
-                self._log(f"[ATTACK #{idx}] Signature falsifiee", "attack")
+                pkg["sig"] = b64e(b"FAKE_SIGNATURE_XXX")
+                self._log("[ATTACK] Signature falsifiee", "attack")
             elif t == "key":
-                pkg["key"] = b64e(b"FAKE_AES_KEY_INVALID_XXX_000")
-                self._log(f"[ATTACK #{idx}] Cle AES modifiee", "attack")
+                pkg["key"] = b64e(b"FAKE_AES_KEY_XXX")
+                self._log("[ATTACK] Cle AES modifiee", "attack")
             elif t == "replay":
                 copy = dict(pkg)
-                new_idx = len(self.intercepted)
                 self.intercepted.append(copy)
-                self.intercept_lb.insert(
-                    tk.END,
-                    f"{new_idx}: [REPLAY] {copy['sender']} -> {copy['receiver']}  [EN ATTENTE]")
-                self.intercept_lb.itemconfig(new_idx, fg=ORANGE)
-                self._log(f"[ATTACK] Replay cree -> paquet #{new_idx}", "attack")
-                dlg.destroy()
-                return
-
-            # Marquer dans la listbox
-            self.intercept_lb.delete(idx)
-            self.intercept_lb.insert(
-                idx, f"{idx}: {pkg['sender']} -> {pkg['receiver']}  [MODIFIE - pret]")
-            self.intercept_lb.itemconfig(idx, fg=ORANGE)
+                self.intercept_lb.insert(tk.END,
+                    f"{len(self.intercepted)-1}: [REPLAY] {copy['sender']} -> {copy['receiver']}")
+                self._on_incoming(copy)
+                self._log("[ATTACK] Replay injecte", "attack")
             self._log(f"[AFTER]  ct={pkg['ct'][:16]}...", "warn")
             dlg.destroy()
 
@@ -884,7 +793,7 @@ class SecureApp:
                 font=("Courier", 10), relief="flat", bd=0,
                 activebackground=color, cursor="hand2",
                 command=lambda t=typ: attack(t)
-            ).pack(fill="x", padx=20, pady=3, ipady=6)
+            ).pack(fill="x", padx=20, pady=4, ipady=6)
 
 # ============================================================
 # RUN
@@ -892,4 +801,4 @@ class SecureApp:
 if __name__ == "__main__":
     root = tk.Tk()
     app = SecureApp(root)
-    root.mainloop() 
+    root.mainloop()  
