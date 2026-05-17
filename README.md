@@ -7,7 +7,7 @@
 
 ## 📹 Démonstration vidéo
 
-🎬 **Lien Google Drive :** `https://drive.google.com/file/d/13t7UUiBDCWHKYrtKSJapcSPKEWQzIWZC/view?usp=sharing`
+🎬 **Lien Google Drive :** `[https://drive.google.com/file/d/13t7UUiBDCWHKYrtKSJapcSPKEWQzIWZC/view?usp=sharing]`.
 
 ---
 
